@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wp-backup-doctor by AamirTechs</title>
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f6f8fb; color: #1c2733; }
+header { background: #0b1f3a; color: #ffffff; padding: 28px 20px 22px; border-bottom: 4px solid #d4a72c; }
+header .wrap, main, footer .wrap { max-width: 880px; margin: 0 auto; }
+header h1 { margin: 0 0 6px; font-size: 28px; }
+header p { margin: 0; color: #c9d6e8; font-size: 15px; }
+main { padding: 24px 20px 8px; }
+.card { background: #ffffff; border-radius: 12px; padding: 20px; box-shadow: 0 1px 4px rgba(11, 31, 58, 0.12); }
+label { display: block; font-weight: 600; margin: 14px 0 6px; font-size: 14px; }
+label:first-child { margin-top: 0; }
+textarea { width: 100%; min-height: 180px; padding: 10px; border: 1px solid #c3cedd; border-radius: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+input[type="text"], input[type="number"], input[type="date"], select { padding: 8px 10px; border: 1px solid #c3cedd; border-radius: 8px; font-size: 14px; background: #ffffff; }
+.controls { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; }
+.controls .field label { margin-top: 0; }
+.checkline { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; padding-bottom: 9px; }
+.checkline input { width: 16px; height: 16px; }
+.buttons { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 10px; }
+button { border: 0; border-radius: 8px; padding: 10px 18px; font-size: 14px; font-weight: 600; cursor: pointer; }
+button.primary { background: #0b1f3a; color: #ffffff; }
+button.primary:hover { background: #14315c; }
+button.secondary { background: #eef2f8; color: #0b1f3a; border: 1px solid #c3cedd; }
+button.accent { background: #d4a72c; color: #0b1f3a; }
+pre { background: #0b1f3a; color: #e8eef7; border-radius: 8px; padding: 14px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; font-size: 13px; min-height: 60px; }
+.hint { font-size: 13px; color: #5a6b82; margin-top: 6px; }
+footer { padding: 18px 20px 30px; color: #5a6b82; font-size: 13px; }
+footer a { color: #0b1f3a; }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <h1>wp-backup-doctor</h1>
+    <p>Audit a WordPress backup manifest or listing for missing, stale and empty backups.</p>
+  </div>
+</header>
+<main>
+  <div class="card">
+    <label for="file">Choose a file</label>
+    <input type="file" id="file" accept=".json,.txt,text/plain,application/json">
+    <label for="input">Or paste a backup manifest (JSON) or listing (text)</label>
+    <textarea id="input" placeholder="[{"name": "site-db.sql.gz", "size": 12345, "modified": "2026-11-04", "type": "database"}]"></textarea>
+
+    <div class="controls" style="margin-top:14px;">
+      <div class="field">
+        <label for="opt-maxage">Max age in days</label>
+        <input type="number" id="opt-maxage" value="7" min="0" step="any">
+      </div>
+      <div class="field">
+        <label for="opt-component">Component</label>
+        <select id="opt-component">
+          <option value="">All components</option>
+          <option value="database">database</option>
+          <option value="uploads">uploads</option>
+          <option value="plugins-themes">plugins-themes</option>
+        </select>
+      </div>
+    </div>
+    <div class="buttons">
+      <button type="button" class="primary" id="run">Run</button>
+      <button type="button" class="secondary" id="sample">Load sample</button>
+      <button type="button" class="accent" id="download" disabled>Download report</button>
+    </div>
+    <label for="output">Report</label>
+    <pre id="output">Your report will appear here.</pre>
+    <p class="hint">A JSON manifest is a list of entries with name, size, modified date and type. A listing has one entry per line: name size ISO-date [type]. Backup age is measured against the current time, like the CLI.</p>
+  </div>
+</main>
+<footer>
+  <div class="wrap">
+    <p>Built by AamirTechs. <a href="https://aamirtechs.github.io/">All tools</a> | <a href="https://github.com/aamirtechs/wp-backup-doctor">Source</a></p>
+    <p>Privacy: this tool runs 100% in your browser. Nothing is uploaded.</p>
+  </div>
+</footer>
+<script id="core">
+// wp-backup-doctor core logic: a faithful port of wp_backup_doctor.py.
+// Pure functions only, no DOM access.
+// window.runTool(inputText, options) returns the CLI text report.
+// options: { maxAge: 7, component: "" (one of database, uploads,
+//            plugins-themes, or empty for all),
+//            now: "" (optional ISO datetime used as the reference time,
+//            defaults to the current time, like the Python CLI),
+//            source: "stdin" (label used in input error messages) }
+"use strict";
+
+var REQUIRED_COMPONENTS = ["database", "uploads", "plugins-themes"];
+var TYPE_ALIASES = {
+  "db": "database", "database": "database", "sql": "database",
+  "database-backup": "database",
+  "uploads": "uploads", "media": "uploads", "uploads-backup": "uploads",
+  "plugins": "plugins-themes", "plugin": "plugins-themes",
+  "themes": "plugins-themes", "theme": "plugins-themes",
+  "plugins-themes": "plugins-themes", "plugins_themes": "plugins-themes",
+  "wp-content": "plugins-themes"
+};
+
+function InputError(message) { this.message = message; }
+InputError.prototype = Object.create(Error.prototype);
+
+function pyRepr(value) {
+  if (value === null || value === undefined) return "None";
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  var s = String(value);
+  var quote = "'";
+  if (s.indexOf("'") !== -1 && s.indexOf('"') === -1) quote = '"';
+  var out = quote;
+  for (var i = 0; i < s.length; i++) {
+    var ch = s.charAt(i);
+    var code = s.charCodeAt(i);
+    if (ch === "\\") out += "\\\\";
+    else if (ch === quote) out += "\\" + quote;
+    else if (ch === "\n") out += "\\n";
+    else if (ch === "\r") out += "\\r";
+    else if (ch === "\t") out += "\\t";
+    else if (code < 32 || code === 127) {
+      var hex = code.toString(16);
+      out += "\\x" + (hex.length < 2 ? "0" + hex : hex);
+    } else out += ch;
+  }
+  return out + quote;
+}
+
+function pyNumStr(x) {
+  if (typeof x !== "number" || !isFinite(x)) return String(x);
+  if (Number.isInteger(x) && Math.abs(x) < 1e16) return String(x);
+  return String(x);
+}
+
+function isLeap(y) { return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0; }
+function daysInMonth(y, m) {
+  return [31, isLeap(y) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1];
+}
+
+// Parse an ISO date or datetime to epoch milliseconds. Naive values are
+// read as UTC, like the Python CLI. Throws InputError on bad input.
+function parseISODateMs(text, where) {
+  if (typeof text !== "string" || !text.trim()) {
+    throw new InputError(where + ": modified date is missing or not a string");
+  }
+  var cleaned = text.trim();
+  if (/[Zz]$/.test(cleaned)) cleaned = cleaned.slice(0, -1) + "+00:00";
+  var m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?\s*([+-]\d{2}:?\d{2})?)?$/.exec(cleaned);
+  if (!m) {
+    throw new InputError(where + ": modified date is not a valid ISO date: " + pyRepr(text));
+  }
+  var y = +m[1], mo = +m[2], d = +m[3];
+  if (mo < 1 || mo > 12 || d < 1 || d > daysInMonth(y, mo)) {
+    throw new InputError(where + ": modified date is not a valid ISO date: " + pyRepr(text));
+  }
+  var hh = m[4] ? +m[4] : 0, mi = m[5] ? +m[5] : 0, ss = m[6] ? +m[6] : 0;
+  if (hh > 23 || mi > 59 || ss > 60) {
+    throw new InputError(where + ": modified date is not a valid ISO date: " + pyRepr(text));
+  }
+  var fracMs = 0;
+  if (m[7]) fracMs = Math.round(Number("0." + m[7]) * 1000);
+  var ms = Date.UTC(y, mo - 1, d, hh, mi, ss, fracMs);
+  if (m[8]) {
+    var off = m[8].replace(":", "");
+    var sign = off.charAt(0) === "-" ? -1 : 1;
+    var offMs = sign * ((+off.slice(1, 3)) * 3600000 + (+off.slice(3, 5)) * 60000);
+    ms -= offMs;
+  }
+  return ms;
+}
+
+function normalizeType(raw, where) {
+  if (raw === null || raw === undefined) return [null, null];
+  if (typeof raw === "string" && !raw.trim()) return [null, null];
+  if (typeof raw !== "string") {
+    throw new InputError(where + ": type must be a string, got " + pyRepr(raw));
+  }
+  var key = raw.trim().toLowerCase();
+  var found = Object.prototype.hasOwnProperty.call(TYPE_ALIASES, key) ? TYPE_ALIASES[key] : null;
+  return [found, raw.trim()];
+}
+
+function inferComponent(name) {
+  var lowered = String(name).toLowerCase();
+  if (lowered.indexOf("database") !== -1 ||
+      lowered.endsWith(".sql") || lowered.endsWith(".sql.gz") || lowered.endsWith(".sql.zip") ||
+      lowered.indexOf("-db-") !== -1 ||
+      lowered.indexOf("db-") === 0 || lowered.indexOf("db_") === 0) {
+    return "database";
+  }
+  if (lowered.indexOf("uploads") !== -1) return "uploads";
+  if (lowered.indexOf("plugin") !== -1 || lowered.indexOf("theme") !== -1) return "plugins-themes";
+  return null;
+}
+
+function buildEntry(raw, where) {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new InputError(where + ": each entry must be an object");
+  }
+  var name = raw["name"];
+  if (typeof name !== "string" || !name.trim()) {
+    throw new InputError(where + ": entry name is missing or not a string");
+  }
+  name = name.trim();
+  var size = ("size" in raw) ? raw["size"] : null;
+  if (size === undefined) size = null;
+  if (size !== null) {
+    if (typeof size === "boolean" || typeof size !== "number" || !Number.isInteger(size)) {
+      throw new InputError(where + ": size for " + pyRepr(name) + " must be an integer");
+    }
+    if (size < 0) {
+      throw new InputError(where + ": size for " + pyRepr(name) + " must not be negative");
+    }
+  }
+  var modifiedRaw;
+  var keys = ["modified", "modified_date", "date", "mtime"];
+  for (var i = 0; i < keys.length; i++) {
+    if (keys[i] in raw) { modifiedRaw = raw[keys[i]]; break; }
+  }
+  var modified = parseISODateMs(modifiedRaw, where);
+  var modifiedText = (typeof modifiedRaw === "string") ? modifiedRaw.trim() : String(modifiedRaw);
+  var typeRaw;
+  var typeKeys = ["type", "component", "kind"];
+  for (var j = 0; j < typeKeys.length; j++) {
+    if (typeKeys[j] in raw) { typeRaw = raw[typeKeys[j]]; break; }
+  }
+  if (typeRaw === undefined) typeRaw = null;
+  var nt = normalizeType(typeRaw, where);
+  var component = nt[0], rawType = nt[1];
+  if (component === null && typeRaw !== null && typeRaw !== undefined && String(typeRaw).trim()) {
+    component = null;
+  } else if (component === null) {
+    component = inferComponent(name);
+  }
+  return { name: name, size: size, modified: modified, modified_text: modifiedText,
+           component: component, raw_type: rawType };
+}
+
+function parseJSONManifest(text, source) {
+  var data;
+  try {
+    data = JSON.parse(text);
+  } catch (exc) {
+    throw new InputError(source + ": invalid JSON: " + exc.message);
+  }
+  if (data !== null && typeof data === "object" && !Array.isArray(data)) {
+    var keys = ["entries", "backups", "files"];
+    var found = false;
+    for (var i = 0; i < keys.length; i++) {
+      if (keys[i] in data) { data = data[keys[i]]; found = true; break; }
+    }
+    if (!found) {
+      throw new InputError(source + ": JSON object must contain an 'entries' list");
+    }
+  }
+  if (!Array.isArray(data)) {
+    throw new InputError(source + ": JSON manifest must be a list of entries");
+  }
+  return data.map(function(raw, idx) { return buildEntry(raw, source + " entry " + idx); });
+}
+
+function parseListing(text, source) {
+  var entries = [];
+  var lines = text.split(/\r\n|\r|\n/);
+  for (var idx = 0; idx < lines.length; idx++) {
+    var line = lines[idx];
+    var lineNo = idx + 1;
+    var stripped = line.trim();
+    if (!stripped || stripped.indexOf("#") === 0) continue;
+    var parts = stripped.split(/\s+/);
+    if (parts.length < 3) {
+      throw new InputError(source + " line " + lineNo +
+        ": expected 'name size ISO-date [type]', got: " + pyRepr(line));
+    }
+    var name = parts[0], sizeText = parts[1], dateText = parts[2];
+    if (!/^[+-]?\d+$/.test(sizeText)) {
+      throw new InputError(source + " line " + lineNo + ": size is not an integer: " + pyRepr(sizeText));
+    }
+    var size = parseInt(sizeText, 10);
+    if (size < 0) {
+      throw new InputError(source + " line " + lineNo + ": size must not be negative");
+    }
+    var modified = parseISODateMs(dateText, source + " line " + lineNo);
+    var typeRaw = parts.length > 3 ? parts[3] : null;
+    if (parts.length > 4) {
+      throw new InputError(source + " line " + lineNo +
+        ": too many fields, expected at most 'name size ISO-date [type]', got: " + pyRepr(line));
+    }
+    var nt = normalizeType(typeRaw, source + " line " + lineNo);
+    var component = nt[0], rawType = nt[1];
+    if (component === null && typeRaw === null) {
+      component = inferComponent(name);
+    }
+    entries.push({ name: name, size: size, modified: modified, modified_text: dateText,
+                   component: component, raw_type: rawType });
+  }
+  return entries;
+}
+
+function parseInput(text, source) {
+  var stripped = text.replace(/^\s+/, "");
+  if (stripped.indexOf("{") === 0 || stripped.indexOf("[") === 0) {
+    return parseJSONManifest(text, source);
+  }
+  return parseListing(text, source);
+}
+
+function audit(entries, maxAgeDays, nowMs, components) {
+  var wanted = components.slice();
+  var kept;
+  if (wanted.length === 1) {
+    kept = entries.filter(function(e) { return e.component === wanted[0]; });
+  } else {
+    kept = entries.filter(function(e) {
+      return wanted.indexOf(e.component) !== -1 || e.component === null;
+    });
+  }
+  var findings = [];
+  var seenNames = {};
+  kept.forEach(function(entry) {
+    var ageDays = (nowMs - entry.modified) / 86400000;
+    if (ageDays > maxAgeDays) {
+      findings.push({ rule: "stale-backup", severity: "error",
+        message: "backup " + pyRepr(entry.name) + " is older than max age " +
+                 pyNumStr(maxAgeDays) + " days (modified " + entry.modified_text + ")" });
+    }
+    if (entry.size === 0) {
+      findings.push({ rule: "empty-file", severity: "warning",
+        message: "backup " + pyRepr(entry.name) + " is empty (0 bytes)" });
+    }
+    var lowered = entry.name.toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(seenNames, lowered)) {
+      findings.push({ rule: "duplicate-backup", severity: "warning",
+        message: "backup " + pyRepr(entry.name) + " is a duplicate of an earlier entry" });
+    } else {
+      seenNames[lowered] = entry;
+    }
+    if (entry.component === null) {
+      findings.push({ rule: "unknown-component", severity: "warning",
+        message: "backup " + pyRepr(entry.name) +
+                 " has no recognized component type, so it does not count toward database, uploads, or plugins-themes" });
+    }
+  });
+  wanted.forEach(function(component) {
+    var members = kept.filter(function(e) { return e.component === component; });
+    var nonEmpty = members.filter(function(e) { return e.size !== 0; });
+    if (!nonEmpty.length) {
+      findings.push({ rule: "missing-component", severity: "error",
+        message: "no non-empty backup found for component " + pyRepr(component) });
+    }
+  });
+  var errors = 0, warnings = 0;
+  findings.forEach(function(f) { if (f.severity === "error") errors++; else warnings++; });
+  return { findings: findings, errors: errors, warnings: warnings };
+}
+
+function renderText(report) {
+  var lines = report.findings.map(function(f) {
+    return f.severity.toUpperCase() + " [" + f.rule + "]: " + f.message;
+  });
+  if (report.errors) {
+    lines.push("FAIL: " + report.errors + " error(s), " + report.warnings + " warning(s)");
+  } else if (report.warnings) {
+    lines.push("WARN: 0 error(s), " + report.warnings + " warning(s)");
+  } else {
+    lines.push("OK: backups pass all checks");
+  }
+  return lines.join("\n");
+}
+
+window.runTool = function(inputText, options) {
+  options = options || {};
+  var source = options.source ? String(options.source) : "stdin";
+  var maxAge = (options.maxAge === undefined || options.maxAge === null || options.maxAge === "")
+    ? 7 : Number(options.maxAge);
+  if (typeof maxAge !== "number" || isNaN(maxAge)) maxAge = 7;
+  if (maxAge < 0) return "error: --max-age must not be negative\n";
+  var components = REQUIRED_COMPONENTS;
+  if (options.component) {
+    if (REQUIRED_COMPONENTS.indexOf(String(options.component)) === -1) {
+      return "error: --component must be one of database, uploads, plugins-themes\n";
+    }
+    components = [String(options.component)];
+  }
+  var nowMs;
+  if (options.now) {
+    try {
+      nowMs = parseISODateMs(String(options.now), "options");
+    } catch (exc) {
+      return "error: " + exc.message + "\n";
+    }
+  } else {
+    nowMs = Date.now();
+  }
+  var entries;
+  try {
+    entries = parseInput(String(inputText == null ? "" : inputText), source);
+  } catch (exc) {
+    if (exc instanceof InputError) return "error: " + exc.message + "\n";
+    throw exc;
+  }
+  var report = audit(entries, maxAge, nowMs, components);
+  return renderText(report) + "\n";
+};
+</script>
+<script>
+(function () {
+  var SAMPLE_TEXT = `[
+    {
+        "modified": "2026-11-04T02:15:00+00:00",
+        "name": "example-com-db-2026-11-04.sql.gz",
+        "size": 48291344,
+        "type": "database"
+    },
+    {
+        "modified": "2026-11-04T02:20:00+00:00",
+        "name": "example-com-uploads-2026-11-04.zip",
+        "size": 312884120,
+        "type": "uploads"
+    },
+    {
+        "modified": "2026-11-04T02:18:00+00:00",
+        "name": "example-com-plugins-themes-2026-11-04.zip",
+        "size": 87452110,
+        "type": "plugins-themes"
+    }
+]
+`;
+  var inputEl = document.getElementById("input");
+  var outputEl = document.getElementById("output");
+  var downloadBtn = document.getElementById("download");
+  var fileName = "";
+  var lastReport = "";
+
+  document.getElementById("file").addEventListener("change", function (event) {
+    var file = event.target.files && event.target.files[0];
+    if (!file) return;
+    fileName = file.name;
+    var reader = new FileReader();
+    reader.onload = function () { inputEl.value = String(reader.result || ""); };
+    reader.readAsText(file);
+  });
+  document.getElementById("sample").addEventListener("click", function () {
+    inputEl.value = SAMPLE_TEXT;
+    fileName = "";
+  });
+  document.getElementById("run").addEventListener("click", function () {
+    var options = {
+      maxAge: document.getElementById("opt-maxage").value,
+      component: document.getElementById("opt-component").value,
+      source: "stdin"
+    };
+    lastReport = window.runTool(inputEl.value, options);
+    outputEl.textContent = lastReport;
+    downloadBtn.disabled = false;
+  });
+  downloadBtn.addEventListener("click", function () {
+    if (!lastReport) return;
+    var blob = new Blob([lastReport], { type: "text/plain;charset=utf-8" });
+    var url = URL.createObjectURL(blob);
+    var link = document.createElement("a");
+    link.href = url;
+    link.download = "wp-backup-doctor-report.txt";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  });
+})();
+</script>
+</body>
+</html>

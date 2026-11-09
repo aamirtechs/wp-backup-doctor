@@ -1,4 +1,5 @@
 # wp-backup-doctor
+**Live tool:** https://aamirtechs.github.io/wp-backup-doctor/ (runs in your browser, no install)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/aamirtechs/wp-backup-doctor/blob/main/LICENSE) [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/aamirtechs/wp-backup-doctor/issues)
 
