@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wp-backup-doctor"
+version = "1.0.0"
+description = "Offline auditor for a WordPress backup set: age and completeness"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+
+[project.scripts]
+wp-backup-doctor = "wp_backup_doctor:main"
+
+[tool.setuptools]
+py-modules = ["wp_backup_doctor"]

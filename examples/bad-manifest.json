@@ -1,0 +1,20 @@
+[
+    {
+        "modified": "2026-10-20T02:15:00+00:00",
+        "name": "example-com-db-2026-10-20.sql.gz",
+        "size": 48291344,
+        "type": "database"
+    },
+    {
+        "modified": "2026-10-20T02:15:00+00:00",
+        "name": "example-com-db-2026-10-20.sql.gz",
+        "size": 48291344,
+        "type": "database"
+    },
+    {
+        "modified": "2026-11-04T02:18:00+00:00",
+        "name": "example-com-plugins-themes-2026-11-04.zip",
+        "size": 0,
+        "type": "plugins-themes"
+    }
+]

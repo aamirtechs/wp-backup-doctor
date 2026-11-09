@@ -1,0 +1,4 @@
+# WordPress backup folder listing: name, size in bytes, ISO date, type.
+example-com-db-2026-11-04.sql.gz 48291344 2026-11-04T02:15:00+00:00 database
+example-com-uploads-2026-11-04.zip 312884120 2026-11-04T02:20:00+00:00 uploads
+example-com-plugins-themes-2026-11-04.zip 87452110 2026-11-04T02:18:00+00:00 plugins-themes
